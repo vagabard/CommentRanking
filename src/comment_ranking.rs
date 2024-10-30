@@ -96,7 +96,7 @@ mod comment_ranking{
 			let should_make_comment = ((number_of_comments / number_of_user_interactions)as f32) < rng.gen();
 			if comment_list_result.len()< number_of_comments as usize && (comment_list_result.len() < 1 || should_make_comment ){
 				//add comment
-				let mut comment = generate_one_comments(&one_user, number_of_views_for_topic);
+				let comment = generate_one_comments(&one_user, number_of_views_for_topic);
 				comment_list_result.push(comment);
 			}
 			simulate_one_user_interaction(&mut comment_list_result, one_user, number_of_views_for_topic, comment_scoring_method)
@@ -204,9 +204,9 @@ mod comment_ranking{
 		let mut positive_scores  = 0;
 		let mut negative_scores = 0;
 		for one_user_score in comment.user_scores{
-			if one_user_score.score > 0 as f32 {
+			if one_user_score.score > 0.0  {
 				positive_scores += 1;
-			}else if one_user_score.score < 0 as f32 {
+			}else if one_user_score.score < 0.0 {
 				negative_scores += 1;
 			}
 		}
@@ -218,9 +218,9 @@ mod comment_ranking{
 		match comment_scoring_method {
 			CommentScoringMethod::ThumbsUpDown => {
 				if user_comment_score< -0.5 {
-					-1 as f32
+					-1.0
 				}else if user_comment_score> 0.5 {
-					1 as f32
+					1.0
 				}else {
 					0.0
 				}
