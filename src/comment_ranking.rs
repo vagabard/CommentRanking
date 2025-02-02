@@ -7,17 +7,19 @@ use rand::seq::SliceRandom;
 	use rand_distr::Beta;
 	use rand_distr::{Distribution, Normal};
 	use std::cmp::Ordering;
+	use std::fs::File;
 	use strum_macros::Display;
 	
 	use strum_macros::EnumIter;
 
 	use log::info;
 	
-	const AVERAGE_NUMBER_OF_COMMENTS_VIEWED_BY_USER: f64 = 8.0;
+	const AVERAGE_NUMBER_OF_COMMENTS_VIEWED_BY_USER: f64 = 800.0;
 	const TIME_TO_KEEP_NEW_COMMENTS_AT_TOP: u16 = 5;
 	const NOISE_LEVEL_FOR_USER_SCORING: f32 = 0.0;
+	const SCALE_FOR_USER_ERROR: f32 = 1.0;
 
-	const DO_LOGGING: bool = true ;
+	const DO_LOGGING: bool = false ;
 	
 	static mut LOG_INITIALIZED: bool = false;
 	
@@ -47,9 +49,9 @@ use rand::seq::SliceRandom;
 	#[derive(Copy, Clone, Debug)]
 	struct User {
 		id: u16,
-//		reputation: f32,
-		scoring_accuracy: f32,
-//		preferred_sorting: CommentListSortingMethod,
+		//		reputation: f32,
+		scoring_error: f32,
+		//		preferred_sorting: CommentListSortingMethod,
 		//user_comments: Vec<Comment>
 	}
 
@@ -142,25 +144,20 @@ use rand::seq::SliceRandom;
 				comment_scoring_method,
 			);
 			let user_comments = position_score_comment_list_perceived.iter().map(|(_, comment)| comment.user_scores.clone()).collect::<Vec<Vec<AssignedScore>>>();
-			debug_info_to_return.push_str( format!(" assigned comments post interaction {:?}", user_comments).as_str());
+			info!(" assigned comments post interaction {:?}", user_comments);
 			comment_list_result = position_score_comment_list_perceived.clone();
 		}
 		// create a sorted list based on the true quality of the comments
 		let mut position_score_comment_list_optimal = comment_list_result.to_vec();
 		let position_score_comment_list_optimal =
 			calculate_sorting_scores_for_comments_in_list(&mut position_score_comment_list_optimal, comment_list_sorting_type, -1, true);
-		debug_info_to_return.push_str( format!(
-			"pre sorted list {:?}",
-			position_score_comment_list_optimal
-//			scored_comment_list_to_string(&position_score_comment_list_optimal)
-		).as_str());
 		position_score_comment_list_optimal
 			.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-		debug_info_to_return.push_str( format!(
+		info!(
 			"ppost scored sorted list {:?}",
 			position_score_comment_list_optimal
 //			scored_comment_list_to_string(&position_score_comment_list_optimal)
-		).as_str());
+		);
 
 		let maximum_possible_score =
 			cumulative_score_for_sorted_list(&position_score_comment_list_optimal, sort_scoring_method);
@@ -185,7 +182,7 @@ use rand::seq::SliceRandom;
 			info!("{}", debug_info_to_return);
 			panic!("user score is nan");
 		}
-
+		info!("{} {}", user_score, maximum_possible_score);
 		user_score / maximum_possible_score
 	}
 
@@ -217,7 +214,7 @@ use rand::seq::SliceRandom;
 			//if list_of_comments.len() >= (comment_index + 1) as usize {}
 			let one_comment = list_of_comments.get_mut(comment_index as usize).unwrap();
 			let scoring_noise = NOISE_LEVEL_FOR_USER_SCORING*(beta.sample(&mut thread_rng()) - 0.5); // beta goes from 0 to 1, we want this centered around 0
-			let user_scoring_precision = scoring_noise * user.scoring_accuracy;
+			let user_scoring_precision = 1.0; // scoring_noise * user.scoring_accuracy;
 			let new_comment_score =
 				(1.0+user_scoring_precision) * one_comment.1.true_quality; // multiply how accurate the user is at true quality, and quality.  Then add some noise
 			let converted_score = convert_user_comment_score_to_comment_scoring_system(
@@ -251,16 +248,24 @@ use rand::seq::SliceRandom;
 		let mut users = Vec::new();
 		let mut rng = thread_rng();
 		let beta = Beta::new(5.0, 5.0).unwrap();
+//		let user_error_file_header = format!("user-errors-{}-", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+//		let filename = format!("{}.csv", user_error_file_header);
+//		let file = File::create(&filename).expect("Failed to create file");
+//		let mut wtr = csv::Writer::from_writer(file);
+		
 		for user_index in 0..number_of_users_to_create {
-			let user_scoring_accuracy = beta.sample(&mut rng) + 0.5;
+			let user_scoring_error = SCALE_FOR_USER_ERROR* (beta.sample(&mut rng) - 0.5); //center this around 0
+//			wtr.write_record(&[user_scoring_error.to_string()]);
+//			println!("user_scoring_error {}", user_scoring_error);
 			let one_user = User {
 				id: user_index,
 //				reputation: beta.sample(&mut rng),
-				scoring_accuracy: user_scoring_accuracy,
+				scoring_error: user_scoring_error,
 //				preferred_sorting: CommentListSortingMethod::Hot,
 			};
 			users.push(one_user);
 		}
+//		wtr.flush().expect("Failed to flush file");
 		users
 	}
 
@@ -289,23 +294,25 @@ use rand::seq::SliceRandom;
 	) -> f32 {
 		let mut score = 0.0;
 		for comment_index in 0..sorted_comments.len() {
-			info!(
-				"index {} quality {}  multiplier {} ",
-				comment_index,
-				sorted_comments.get(comment_index).unwrap().0,
-				(sorted_comments.len() - comment_index) as f32
-			);
-
-			score += match scoring_method {
+			// use the true score for the comment, not the perceived score
+			let comment_score_to_use = sorted_comments.get(comment_index).unwrap().1.true_quality;
+			let score_increment = match scoring_method {
 				SortScoringMethod::Linear => {
-					sorted_comments.get(comment_index).unwrap().0
-						* (sorted_comments.len() - comment_index) as f32
+					comment_score_to_use* (sorted_comments.len() - comment_index) as f32
 				}
 				SortScoringMethod::PlaceSquared => {
-					sorted_comments.get(comment_index).unwrap().0
-						* ((sorted_comments.len() - comment_index) as f32).powi(2)
+					comment_score_to_use* ((sorted_comments.len() - comment_index) as f32).powi(2)
 				}
-			}
+			};
+			score += score_increment;
+			info!(
+				"index {} quality {}  multiplier {} score increase {} new score {}",
+				comment_index,
+				sorted_comments.get(comment_index).unwrap().0,
+				(sorted_comments.len() - comment_index) as f32,
+				score_increment,
+				score
+			);
 		}
 		score
 	}
@@ -355,8 +362,12 @@ use rand::seq::SliceRandom;
 						(returned_count.0 as f32, returned_count.1 as f32);
 					//let zero_count = comment.1.user_scores.len() as f32 - positive_scores - negative_scores;
 					let normal_confidence_interval_95_percent: f32 = 1.95996398454;
-					let number_of_scores = comment.user_scores.len() as f32;
-					let p_hat = positive_scores / number_of_scores;
+					let mut number_of_scores = comment.user_scores.len() as f32;
+					let mut p_hat = positive_scores / number_of_scores;
+					if p_hat.is_nan(){
+						p_hat = 1.0; // if there are no scores, then just return 1.0
+						number_of_scores = 1.0; // pretend there's a score to avoid divide by zero
+					}
 					let wilson_score_part1 =
 						p_hat + normal_confidence_interval_95_percent.powi(2) / number_of_scores;
 					let wilson_score_under_radical = (p_hat * (1.0 - p_hat)
@@ -727,14 +738,14 @@ use rand::seq::SliceRandom;
 			let user1 = User {
 				id: 1,
 //				reputation: 5.0,
-				scoring_accuracy: 0.8,
+				scoring_error: 0.8,
 //				preferred_sorting: CommentListSortingMethod::Top,
 			};
 
 			let user2 = User {
 				id: 2,
 //				reputation: 2.0,
-				scoring_accuracy: 0.4,
+				scoring_error: 0.4,
 //				preferred_sorting: CommentListSortingMethod::Top,
 			};
 
