@@ -6,7 +6,9 @@ pub mod comment_ranking {
 		use rand_distr::Beta;
 	use rand_distr::{Distribution, Normal};
 	use std::cmp::Ordering;
+	use std::collections::HashMap;
 	use std::fs::File;
+	use std::iter::Map;
 	use strum_macros::Display;
 
 	use strum_macros::EnumIter;
@@ -28,21 +30,29 @@ pub mod comment_ranking {
 	
 
 	#[derive(Clone, Copy, Display)]
-	pub enum SortScoringMethod {
+	#[derive(Hash)]
+#[derive(Eq)]
+#[derive(PartialEq)]
+pub enum SortScoringMethod {
 		Linear,
 		PlaceSquared,
 		NormalizedLinear,
 		NormalizedPlaceSquared,
 	}
 	#[derive(Clone, Copy, Display)]
-	pub enum CommentScoringMethod {
+	#[derive(Hash)]
+#[derive(Eq)]
+#[derive(PartialEq)]
+pub enum CommentScoringMethod {
 		ThumbsUpDown,
 		ZeroToTen,
 		RawScore,
 	}
 
 	#[derive(Clone, Copy, Debug, EnumIter, Display, PartialEq)]
-	pub enum CommentListSortingMethod {
+	#[derive(Hash)]
+#[derive(Eq)]
+pub enum CommentListSortingMethod {
 		Top,
 		New,
 		Hot,
@@ -58,7 +68,10 @@ pub mod comment_ranking {
 	}
 
 	#[derive(Clone, Copy, Display)]
-	pub enum LowScoreMemberHandling {
+	#[derive(Hash)]
+#[derive(Eq)]
+#[derive(PartialEq)]
+pub enum LowScoreMemberHandling {
 		Ignore,
 		Flat_Percent_Chance,
 		Proportional_To_Score_Chance,
@@ -113,7 +126,7 @@ pub mod comment_ranking {
 		}
 	}
 
-	pub fn simulate_comments_for_one_topic(number_of_comments: u32, number_of_user_interactions: u32, comment_scoring_method: CommentScoringMethod, comment_list_sorting_type: CommentListSortingMethod, sort_scoring_method: SortScoringMethod, checkpoint_progress_interaction_count:u32, method_to_handle_low_scoring_members: LowScoreMemberHandling) -> Vec<(u32, f32)> {
+	pub fn simulate_comments_for_one_topic(number_of_comments: u32, number_of_user_interactions: u32, mut comment_scoring_methods:Vec<CommentScoringMethod>, mut  comment_list_sorting_types: Vec<CommentListSortingMethod>, mut  sort_scoring_methods: Vec<SortScoringMethod>, checkpoint_progress_interaction_count:u32,  mut methods_to_handle_low_scoring_members: Vec<LowScoreMemberHandling>) -> HashMap<(CommentScoringMethod,CommentListSortingMethod,SortScoringMethod,LowScoreMemberHandling),Vec<(u32, f32)>> {
 		//let mut debug_info_to_return = String::new();
 		unsafe{
 			if DO_LOGGING &&  !LOG_INITIALIZED {
@@ -124,6 +137,7 @@ pub mod comment_ranking {
 		
 		let mut rng = thread_rng();
 		let users = generate_user_list_for_topic(number_of_user_interactions);
+		let mut results_for_all_combinations:HashMap<(CommentScoringMethod,CommentListSortingMethod,SortScoringMethod,LowScoreMemberHandling),Vec<(u32, f32)>> = HashMap::new();
 		let mut score_to_interaction_number_map: Vec<(u32, f32)> = Vec::with_capacity((number_of_user_interactions / checkpoint_progress_interaction_count) as usize);
 		let mut comment_list_result: Vec<(f32, Comment)> =
 			Vec::with_capacity(number_of_comments as usize);
@@ -160,71 +174,82 @@ pub mod comment_ranking {
 				comment_list_result.push((0.5, comment));
 			}
 			let mut comment_list_copy_to_pass = comment_list_result.to_vec();
-			// figure out how the list should be sorted
-			let mut position_score_comment_list_perceived: &mut Vec<(f32, Comment)> = calculate_sorting_scores_for_comments_in_list(
-				&mut comment_list_copy_to_pass,
-				comment_scoring_method,
-				comment_list_sorting_type,
-				current_number_of_views_for_topic as i32,
-				method_to_handle_low_scoring_members,
-				false,
-			);
-			// now sort it based on the scores computed
-			position_score_comment_list_perceived.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-			//  simulate the user scrolling through the sorted list and voting on comments.
-			//let user_comments = position_score_comment_list_perceived.iter().map(|(_, comment)| comment.user_scores.clone()).collect::<Vec<Vec<AssignedScore>>>();
-			//info!(" assigned comments pre interaction {:?}", user_comments);
-			let (_number_of_comments_viewed, _noise_for_scores, _user_scores_of_comments, _noisy_scores) = simulate_one_user_interaction(
-				&mut position_score_comment_list_perceived,
-				user_for_this_interaction,
-				current_number_of_views_for_topic,
-				comment_scoring_method,
-			);
-			/*
-			comments_per_user_interaction_wtr.write_record(&[current_number_of_views_for_topic.to_string(), number_of_comments_viewed.to_string()]).unwrap();
-			for one_distortion in noise_for_scores {
-				noise_per_user_score_wtr.write_record(&[one_distortion.to_string()]).unwrap();
-			}
-			for one_user_score in user_scores_of_comments {
-				user_scores_wtr.write_record(&[one_user_score.to_string()]).unwrap();
-			}
-			for one_noise in noisy_scores {
-				noisy_per_user_score_wtr.write_record(&[one_noise.to_string()]).unwrap();
-			}
+			for comment_scoring_method in comment_scoring_methods.iter_mut() {
+				for score_sorting_method in sort_scoring_methods.iter_mut() {
+					for sorting_method in comment_list_sorting_types.iter_mut() {
+						for handle_low_score_members in methods_to_handle_low_scoring_members.iter_mut() {
 
-			let user_comments = position_score_comment_list_perceived.iter().map(|(_, comment)| comment.user_scores.clone()).collect::<Vec<Vec<AssignedScore>>>();
-			info!(" assigned comments post interaction {:?}", user_comments);
-			 */
-			comment_list_result = position_score_comment_list_perceived.clone();
-			if (current_number_of_views_for_topic % checkpoint_progress_interaction_count) == 0  && current_number_of_views_for_topic > 0 {
-//				println!("len before add {}  view index {}",score_to_interaction_number_map.len(),  current_number_of_views_for_topic );
-				let (user_to_optimal_sort_ratio, max_scores, user_scores) = calculate_ratio_of_computed_sort_to_optimal_sort(
-					comment_list_sorting_type,
-					comment_scoring_method,
-					sort_scoring_method,
-					&comment_list_result,
-					method_to_handle_low_scoring_members,
-				);
-				score_to_interaction_number_map.push(( current_number_of_views_for_topic, user_to_optimal_sort_ratio));
+							// figure out how the list should be sorted
+							let mut position_score_comment_list_perceived: &mut Vec<(f32, Comment)> = calculate_sorting_scores_for_comments_in_list(
+								&mut comment_list_copy_to_pass,
+								*comment_scoring_method,
+								*sorting_method,
+								current_number_of_views_for_topic as i32,
+								*handle_low_score_members,
+								false,
+							);
+							// now sort it based on the scores computed
+							position_score_comment_list_perceived.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+							//  simulate the user scrolling through the sorted list and voting on comments.
+							//let user_comments = position_score_comment_list_perceived.iter().map(|(_, comment)| comment.user_scores.clone()).collect::<Vec<Vec<AssignedScore>>>();
+							//info!(" assigned comments pre interaction {:?}", user_comments);
+							let (_number_of_comments_viewed, _noise_for_scores, _user_scores_of_comments, _noisy_scores) = simulate_one_user_interaction(
+								&mut position_score_comment_list_perceived,
+								user_for_this_interaction,
+								current_number_of_views_for_topic,
+								*comment_scoring_method,
+							);
+							/*
+                            comments_per_user_interaction_wtr.write_record(&[current_number_of_views_for_topic.to_string(), number_of_comments_viewed.to_string()]).unwrap();
+                            for one_distortion in noise_for_scores {
+                                noise_per_user_score_wtr.write_record(&[one_distortion.to_string()]).unwrap();
+                            }
+                            for one_user_score in user_scores_of_comments {
+                                user_scores_wtr.write_record(&[one_user_score.to_string()]).unwrap();
+                            }
+                            for one_noise in noisy_scores {
+                                noisy_per_user_score_wtr.write_record(&[one_noise.to_string()]).unwrap();
+                            }
+
+                            let user_comments = position_score_comment_list_perceived.iter().map(|(_, comment)| comment.user_scores.clone()).collect::<Vec<Vec<AssignedScore>>>();
+                            info!(" assigned comments post interaction {:?}", user_comments);
+                             */
+							comment_list_result = position_score_comment_list_perceived.clone();
+							if (current_number_of_views_for_topic % checkpoint_progress_interaction_count) == 0 && current_number_of_views_for_topic > 0 {
+								//				println!("len before add {}  view index {}",score_to_interaction_number_map.len(),  current_number_of_views_for_topic );
+								let (user_to_optimal_sort_ratio, max_scores, user_scores) = calculate_ratio_of_computed_sort_to_optimal_sort(
+									*sorting_method,
+									*comment_scoring_method,
+									*score_sorting_method,
+									&comment_list_result,
+									*handle_low_score_members,
+								);
+								score_to_interaction_number_map.push((current_number_of_views_for_topic, user_to_optimal_sort_ratio));
+							}
+							//			print_score_and_truescore_pair_for_comment(position_score_comment_list_perceived.clone());
+							/*
+                                for one_user_vector in user_scores {
+                                    user_score_normalized_wtr.write_record(&[one_user_vector.to_string()]).unwrap();
+                                }
+                                for one_optimum_vector in max_scores {
+                                    optimum_score_normalized_wtr.write_record(&[one_optimum_vector.to_string()]).unwrap();
+                                }
+                            comments_per_user_interaction_wtr.flush().unwrap();
+                            noise_per_user_score_wtr.flush().unwrap();
+                            user_scores_wtr.flush().unwrap();
+                            noisy_per_user_score_wtr.flush().unwrap();
+                            comment_making_time_wtr.flush().unwrap();
+                            user_score_normalized_wtr.flush().unwrap();
+                            optimum_score_normalized_wtr.flush().unwrap();
+                             */
+							results_for_all_combinations.insert((*comment_scoring_method, *sorting_method, *score_sorting_method, *handle_low_score_members),score_to_interaction_number_map.clone());
+						}
+
+					}
+				}
 			}
-//			print_score_and_truescore_pair_for_comment(position_score_comment_list_perceived.clone());
-			/*
-				for one_user_vector in user_scores {
-					user_score_normalized_wtr.write_record(&[one_user_vector.to_string()]).unwrap();
-				}
-				for one_optimum_vector in max_scores {
-					optimum_score_normalized_wtr.write_record(&[one_optimum_vector.to_string()]).unwrap();
-				}
-			comments_per_user_interaction_wtr.flush().unwrap();
-			noise_per_user_score_wtr.flush().unwrap();
-			user_scores_wtr.flush().unwrap();
-			noisy_per_user_score_wtr.flush().unwrap();
-			comment_making_time_wtr.flush().unwrap();
-			user_score_normalized_wtr.flush().unwrap();
-			optimum_score_normalized_wtr.flush().unwrap();
-			 */
 		}
-		score_to_interaction_number_map
+		results_for_all_combinations
 	}
 
 	fn _print_score_and_truescore_pair_for_comment(stuff: Vec<(f32, Comment)>){
